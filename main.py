@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 # ---- STEP 0: Seeding for reproducibility ----
 SEED = 42
@@ -132,6 +133,7 @@ def generate_samples(num_samples=1000):
 
     # Start from pure noise x_t
     x_t = torch.randn(num_samples, 2)
+    trajectory = [x_t.numpy()]
 
     for t_idx in reversed(range(T_NOISE_STEPS)):
         t_tensor = torch.full((num_samples,), t_idx, dtype=torch.long)
@@ -143,7 +145,7 @@ def generate_samples(num_samples=1000):
         alpha_t = alphas[t_idx]
         alpha_bar_t = alpha_bars[t_idx]
 
-        # Compute mean equation 
+        # Compute mean equation
         mean = (1.0 / torch.sqrt(alpha_t)) * (
             x_t - (beta_t / torch.sqrt(1.0 - alpha_bar_t)) * pred_noise
         )
@@ -156,12 +158,35 @@ def generate_samples(num_samples=1000):
         else:
             x_t = mean
 
-    return x_t.numpy()
+        trajectory.append(x_t.numpy())
 
-# Run reverse process 
-generated_points = generate_samples()
+    return x_t.numpy(), trajectory
 
+# Run reverse process
+generated_points, trajectory = generate_samples()
+
+# ---- Final PNG ----
+plt.figure()
 plt.scatter(generated_points[:,0], generated_points[:,1], s=5, c='red', alpha=0.5)
 plt.title("Generated 2D Swiss Roll via Reverse Diffusion")
 plt.savefig("diffusion_final_result.png")
+
+# ---- Animated MP4 of the reverse diffusion process ----
+fig, ax = plt.subplots()
+scatter = ax.scatter([], [], s=5, c='red', alpha=0.5)
+axis_lim = np.abs(np.stack(trajectory)).max() * 1.1
+ax.set_xlim(-axis_lim, axis_lim)
+ax.set_ylim(-axis_lim, axis_lim)
+title = ax.set_title("")
+
+def update(frame_idx):
+    points = trajectory[frame_idx]
+    scatter.set_offsets(points)
+    t_remaining = T_NOISE_STEPS - frame_idx
+    title.set_text(f"Reverse Diffusion (t={t_remaining})")
+    return scatter, title
+
+anim = FuncAnimation(fig, update, frames=len(trajectory), interval=50, blit=False)
+anim.save("diffusion_swiss_roll.mp4", writer="ffmpeg", fps=20)
+
 plt.show()
