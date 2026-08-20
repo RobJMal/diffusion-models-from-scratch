@@ -73,3 +73,38 @@ class ToyDenoiser(nn.Module):
         return self.net(input_feat)
 
 diffusion_model = ToyDenoiser()
+
+# ---- STEP 4: Training loop ----
+optimizer = torch.optim.Adam(diffusion_model.parameters(), lr=1e-3)
+batch_size = 250
+epochs = 3000
+
+for epoch in range(epochs):
+    # Sample random mini-batch from 2D dataset
+    idx = torch.randint(0, N_SAMPLES, (batch_size,))
+    x0 = X[idx]
+
+    # Sampling random timesteps t for each sample in batch
+    t = torch.randint(0, T_NOISE_STEPS, (batch_size,))
+
+    # Sample random Gaussian noise
+    epsilon = torch.randn_like(x0)
+
+    # Compute noisy data points x_t at timestep t
+    s_alpha_bar = sqrt_alpha_bars[t].unsqueeze(1)
+    s_one_minus_alpha_bar = sqrt_one_minus_alpha_bars[t].unsqueeze(1)
+    x_t = s_alpha_bar * x0 + s_one_minus_alpha_bar * epsilon
+
+    # Predict noise and compute loss
+    pred_epsilon = diffusion_model(x_t, t)
+    loss = nn.functional.mse_loss(pred_epsilon, epsilon)
+
+    # Backprop
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if (epoch + 1) % 500 == 0:
+        print(f"Epoch {epoch+1}/{epochs} | Loss: {loss.item():.5f}")
+
+
