@@ -18,7 +18,7 @@ class SinusoidalPosEmb(nn.Module):
         return torch.cat((emb.sin(), emb.cos()), dim=-1)
 
 
-class ToyDenoiser(nn.Module):
+class MLPDenoiser(nn.Module):
     def __init__(self, time_dim=16, coordinate_dim=2, inner_layer_dim=256) -> None:
         super().__init__()
 

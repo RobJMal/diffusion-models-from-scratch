@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 
-def make_swiss_roll(n_samples: int) -> torch.Tensor:
+def generate_swiss_roll_2d_dataset(n_samples: int) -> torch.Tensor:
     theta = np.linspace(0, 3 * np.pi, n_samples)
     r = theta
 

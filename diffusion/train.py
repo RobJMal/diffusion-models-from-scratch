@@ -5,11 +5,11 @@ import torch.nn as nn
 
 from diffusion.config import Config
 from diffusion.diffusion_process import GaussianDiffusion
-from diffusion.models import ToyDenoiser
+from diffusion.models import MLPDenoiser
 
 
 def _model_config(config: Config) -> dict:
-    """The subset of Config that determines ToyDenoiser's parameter shapes.
+    """The subset of Config that determines MLPDenoiser's parameter shapes.
     Saved alongside checkpoints so a stale checkpoint is detected instead of
     crashing load_state_dict with a shape-mismatch error."""
     return {
@@ -19,9 +19,9 @@ def _model_config(config: Config) -> dict:
     }
 
 
-def get_model(config: Config, diffusion: GaussianDiffusion, x_data: torch.Tensor) -> ToyDenoiser:
+def get_model(config: Config, diffusion: GaussianDiffusion, x_data: torch.Tensor) -> MLPDenoiser:
     """Load a cached, architecture-matching checkpoint if one exists; otherwise train fresh."""
-    model = ToyDenoiser(
+    model = MLPDenoiser(
         time_dim=config.time_dim,
         coordinate_dim=config.coordinate_dim,
         inner_layer_dim=config.inner_layer_dim,
@@ -39,7 +39,7 @@ def get_model(config: Config, diffusion: GaussianDiffusion, x_data: torch.Tensor
     return model
 
 
-def train(model: ToyDenoiser, diffusion: GaussianDiffusion, x_data: torch.Tensor, config: Config) -> None:
+def train(model: MLPDenoiser, diffusion: GaussianDiffusion, x_data: torch.Tensor, config: Config) -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     n_samples = x_data.shape[0]
 

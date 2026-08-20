@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 
 from diffusion.config import Config
-from diffusion.data import make_swiss_roll
+from diffusion.data import generate_swiss_roll_2d_dataset
 from diffusion.diffusion_process import GaussianDiffusion
 from diffusion.train import get_model
 from diffusion.utils import set_seed
@@ -12,7 +12,7 @@ def main() -> None:
     config = Config()
     set_seed(config.seed)
 
-    x_data = make_swiss_roll(config.n_samples)
+    x_data = generate_swiss_roll_2d_dataset(config.n_samples)
     diffusion = GaussianDiffusion(config.timesteps, config.beta_start, config.beta_end)
     model = get_model(config, diffusion, x_data)
 
