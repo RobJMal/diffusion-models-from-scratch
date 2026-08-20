@@ -32,7 +32,7 @@ beta_start = 0.001
 beta_end = 0.2
 
 # Linear schedule for beta
-betas = torch.linspace(beta_start, beta_end, T)
+betas = torch.linspace(beta_start, beta_end, T_NOISE_STEPS)
 alphas = 1.0 - betas    # <T, 1>, fraction of original signal kept at step t
 alpha_bars = torch.cumprod(alphas, dim=0)   # measures how much of original data x0 survives after t consecutive steps
 
@@ -58,7 +58,7 @@ class ToyDenoiser(nn.Module):
         # Main network takes 2D coordinate + time_dim embedding
         self.net = nn.Sequential(
             nn.Linear(coordinate_dim + time_dim, inner_layer_dim),
-            nn.SiLU,
+            nn.SiLU(),
             nn.Linear(inner_layer_dim, inner_layer_dim),
             nn.SiLU(),
             nn.Linear(inner_layer_dim, coordinate_dim)   # Predicts 2D noise vector (?)
@@ -76,8 +76,8 @@ diffusion_model = ToyDenoiser()
 
 # ---- STEP 4: Training loop ----
 optimizer = torch.optim.Adam(diffusion_model.parameters(), lr=1e-3)
-batch_size = 250
-epochs = 3000
+batch_size = 256
+epochs = 10000
 
 for epoch in range(epochs):
     # Sample random mini-batch from 2D dataset
@@ -107,4 +107,42 @@ for epoch in range(epochs):
     if (epoch + 1) % 500 == 0:
         print(f"Epoch {epoch+1}/{epochs} | Loss: {loss.item():.5f}")
 
+# ---- STEP 5: Sampling (Reversing Noise into Data) ----
+@torch.no_grad
+def generate_samples(num_samples=1000):
+    diffusion_model.eval()
 
+    # Start from pure noise x_t
+    x_t = torch.randn(num_samples, 2)
+
+    for t_idx in reversed(range(T_NOISE_STEPS)):
+        t_tensor = torch.full((num_samples,), t_idx, dtype=torch.long)
+
+        # Predict noise
+        pred_noise = diffusion_model(x_t, t_tensor)
+
+        beta_t = betas[t_idx]
+        alpha_t = alphas[t_idx]
+        alpha_bar_t = alpha_bars[t_idx]
+
+        # Compute mean equation 
+        mean = (1.0 / torch.sqrt(alpha_t)) * (
+            x_t - (beta_t / torch.sqrt(1.0 - alpha_bar_t)) * pred_noise
+        )
+
+        if t_idx > 0:
+            # Add small noise z back for stochasticity
+            z = torch.rand_like(x_t)
+            sigma_t = torch.sqrt(beta_t)
+            x_t = mean + sigma_t * z
+        else:
+            x_t = mean
+
+    return x_t.numpy()
+
+# Run reverse process 
+generated_points = generate_samples()
+
+plt.scatter(generated_points[:,0], generated_points[:,1], s=5, c='red', alpha=0.5)
+plt.title("Generated 2D Swiss Roll via Reverse Diffusion")
+plt.show()
