@@ -1,3 +1,4 @@
+import math
 import os
 import random
 from typing import Any
@@ -53,16 +54,30 @@ sqrt_alpha_bars = torch.sqrt(alpha_bars)
 sqrt_one_minus_alpha_bars = torch.sqrt(1.0 - alpha_bars)
 
 # ---- STEP 3: Denoising MLP ----
+class SinusoidalPosEmb(nn.Module):
+    def __init__(self, dim) -> None:
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, t):
+        device = t.device
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        return torch.cat((emb.sin(), emb.cos()), dim=-1)
+
 class ToyDenoiser(nn.Module):
     def __init__(self, time_dim=16) -> None:
         super().__init__()
 
         coordinate_dim = 2  # 2D
-        inner_layer_dim = 128
+        inner_layer_dim = 256
 
         # Embed single int timestep t into small vector
         self.time_embed = nn.Sequential(
-            nn.Linear(1, time_dim), #<1, 1> -> <time_dim, 1>
+            SinusoidalPosEmb(time_dim),
+            nn.Linear(time_dim, time_dim), #<1, 1> -> <time_dim, 1>
             nn.SiLU(),
             nn.Linear(time_dim, time_dim)   # <time_dim, 1> -> <time_dim, 1>
         )
@@ -73,14 +88,14 @@ class ToyDenoiser(nn.Module):
             nn.SiLU(),
             nn.Linear(inner_layer_dim, inner_layer_dim),
             nn.SiLU(),
+            nn.Linear(inner_layer_dim, inner_layer_dim), #<1, 1> -> <inner_layer_dim, 1>
+            nn.SiLU(),
             nn.Linear(inner_layer_dim, coordinate_dim)   # Predicts 2D noise vector (?)
         )
 
     def forward(self, x_t, t):
         # Normalize t to range [-1, 1] for better neural net stability
-        t_norm = (t.float() / T_NOISE_STEPS).unsqueeze(1) * 2.0 - 1.0
-        t_emb = self.time_embed(t_norm)
-
+        t_emb = self.time_embed(t.float())
         input_feat = torch.cat([x_t, t_emb], dim=1)
         return self.net(input_feat)
 
