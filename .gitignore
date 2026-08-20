@@ -1,4 +1,2 @@
-*.pt
-*.mp4
-*.png
+outputs/
 __pycache__/

@@ -1,207 +1,30 @@
-import math
-import os
-import random
-from typing import Any
-
-import torch
-import torch.nn as nn
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
 
-# ---- STEP 0: Seeding for reproducibility ----
-SEED = 42
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
+from diffusion.config import Config
+from diffusion.data import make_swiss_roll
+from diffusion.diffusion_process import GaussianDiffusion
+from diffusion.train import get_model
+from diffusion.utils import set_seed
+from diffusion.viz import save_animation, save_final_png
 
-CHECKPOINT_PATH = "diffusion_model.pt"
 
-# ---- STEP 1 ----
-# Create 2D Swiss roll dataset
-N_SAMPLES = 2000
-theta = np.linspace(0, 3*np.pi, N_SAMPLES)
-r = theta
+def main() -> None:
+    config = Config()
+    set_seed(config.seed)
 
-x = r * np.cos(theta)
-y = r * np.sin(theta)
+    x_data = make_swiss_roll(config.n_samples)
+    diffusion = GaussianDiffusion(config.timesteps, config.beta_start, config.beta_end)
+    model = get_model(config, diffusion, x_data)
 
-X = np.stack([x, y], axis=1)    # bundles the points 
-# Standardize to have mean 0 and std 1 (z-score standardization)
-X = (X - X.mean(axis=0)) / X.std(axis=0)
-X = torch.tensor(X, dtype=torch.float32)
+    generated_points, trajectory = diffusion.generate_samples(
+        model, config.num_generate_samples, config.coordinate_dim
+    )
 
-# plt.scatter(X[:, 0], X[:, 1], s=5, alpha=0.5)
-# plt.title("Target 2D distribution (Swiss Roll)")
-# plt.show()
+    save_final_png(generated_points, config.png_path)
+    save_animation(trajectory, config.timesteps, config.mp4_path)
 
-# ---- STEP 2 ----
-# Define noise schedule pre-computations
-T_NOISE_STEPS = 100
-# Since we add noise backwrads, the noise starts large near T 
-# (beta_end) and becomes smaller towards T=0 (beta_start)
-beta_start = 0.001
-beta_end = 0.2
+    plt.show()
 
-# Linear schedule for beta
-betas = torch.linspace(beta_start, beta_end, T_NOISE_STEPS)
-alphas = 1.0 - betas    # <T, 1>, fraction of original signal kept at step t
-alpha_bars = torch.cumprod(alphas, dim=0)   # measures how much of original data x0 survives after t consecutive steps
 
-# Pre-calculate sqrts for close-form forward sampling equation
-sqrt_alpha_bars = torch.sqrt(alpha_bars)
-sqrt_one_minus_alpha_bars = torch.sqrt(1.0 - alpha_bars)
-
-# ---- STEP 3: Denoising MLP ----
-class SinusoidalPosEmb(nn.Module):
-    def __init__(self, dim) -> None:
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, t):
-        device = t.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = t[:, None] * emb[None, :]
-        return torch.cat((emb.sin(), emb.cos()), dim=-1)
-
-class ToyDenoiser(nn.Module):
-    def __init__(self, time_dim=16) -> None:
-        super().__init__()
-
-        coordinate_dim = 2  # 2D
-        inner_layer_dim = 256
-
-        # Embed single int timestep t into small vector
-        self.time_embed = nn.Sequential(
-            SinusoidalPosEmb(time_dim),
-            nn.Linear(time_dim, time_dim), #<1, 1> -> <time_dim, 1>
-            nn.SiLU(),
-            nn.Linear(time_dim, time_dim)   # <time_dim, 1> -> <time_dim, 1>
-        )
-
-        # Main network takes 2D coordinate + time_dim embedding
-        self.net = nn.Sequential(
-            nn.Linear(coordinate_dim + time_dim, inner_layer_dim),
-            nn.SiLU(),
-            nn.Linear(inner_layer_dim, inner_layer_dim),
-            nn.SiLU(),
-            nn.Linear(inner_layer_dim, inner_layer_dim), #<1, 1> -> <inner_layer_dim, 1>
-            nn.SiLU(),
-            nn.Linear(inner_layer_dim, coordinate_dim)   # Predicts 2D noise vector (?)
-        )
-
-    def forward(self, x_t, t):
-        # Normalize t to range [-1, 1] for better neural net stability
-        t_emb = self.time_embed(t.float())
-        input_feat = torch.cat([x_t, t_emb], dim=1)
-        return self.net(input_feat)
-
-diffusion_model = ToyDenoiser()
-
-# ---- STEP 4: Training loop ----
-if os.path.exists(CHECKPOINT_PATH):
-    print(f"Loading cached model weights from {CHECKPOINT_PATH}")
-    diffusion_model.load_state_dict(torch.load(CHECKPOINT_PATH))
-else:
-    optimizer = torch.optim.Adam(diffusion_model.parameters(), lr=1e-3)
-    batch_size = 256
-    epochs = 10000
-
-    for epoch in range(epochs):
-        # Sample random mini-batch from 2D dataset
-        idx = torch.randint(0, N_SAMPLES, (batch_size,))
-        x0 = X[idx]
-
-        # Sampling random timesteps t for each sample in batch
-        t = torch.randint(0, T_NOISE_STEPS, (batch_size,))
-
-        # Sample random Gaussian noise
-        epsilon = torch.randn_like(x0)
-
-        # Compute noisy data points x_t at timestep t
-        s_alpha_bar = sqrt_alpha_bars[t].unsqueeze(1)
-        s_one_minus_alpha_bar = sqrt_one_minus_alpha_bars[t].unsqueeze(1)
-        x_t = s_alpha_bar * x0 + s_one_minus_alpha_bar * epsilon
-
-        # Predict noise and compute loss
-        pred_epsilon = diffusion_model(x_t, t)
-        loss = nn.functional.mse_loss(pred_epsilon, epsilon)
-
-        # Backprop
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        if (epoch + 1) % 500 == 0:
-            print(f"Epoch {epoch+1}/{epochs} | Loss: {loss.item():.5f}")
-
-    torch.save(diffusion_model.state_dict(), CHECKPOINT_PATH)
-    print(f"Saved model weights to {CHECKPOINT_PATH}")
-
-# ---- STEP 5: Sampling (Reversing Noise into Data) ----
-@torch.no_grad
-def generate_samples(num_samples=1000):
-    diffusion_model.eval()
-
-    # Start from pure noise x_t
-    x_t = torch.randn(num_samples, 2)
-    trajectory = [x_t.numpy()]
-
-    for t_idx in reversed(range(T_NOISE_STEPS)):
-        t_tensor = torch.full((num_samples,), t_idx, dtype=torch.long)
-
-        # Predict noise
-        pred_noise = diffusion_model(x_t, t_tensor)
-
-        beta_t = betas[t_idx]
-        alpha_t = alphas[t_idx]
-        alpha_bar_t = alpha_bars[t_idx]
-
-        # Compute mean equation
-        mean = (1.0 / torch.sqrt(alpha_t)) * (
-            x_t - (beta_t / torch.sqrt(1.0 - alpha_bar_t)) * pred_noise
-        )
-
-        if t_idx > 0:
-            # Add small noise z back for stochasticity
-            z = torch.randn_like(x_t)
-            sigma_t = torch.sqrt(beta_t)
-            x_t = mean + sigma_t * z
-        else:
-            x_t = mean
-
-        trajectory.append(x_t.numpy())
-
-    return x_t.numpy(), trajectory
-
-# Run reverse process
-generated_points, trajectory = generate_samples()
-
-# ---- Final PNG ----
-plt.figure()
-plt.scatter(generated_points[:,0], generated_points[:,1], s=5, c='red', alpha=0.5)
-plt.title("Generated 2D Swiss Roll via Reverse Diffusion")
-plt.savefig("diffusion_final_result.png")
-
-# ---- Animated MP4 of the reverse diffusion process ----
-fig, ax = plt.subplots()
-scatter = ax.scatter([], [], s=5, c='red', alpha=0.5)
-axis_lim = np.abs(np.stack(trajectory)).max() * 1.1
-ax.set_xlim(-axis_lim, axis_lim)
-ax.set_ylim(-axis_lim, axis_lim)
-title = ax.set_title("")
-
-def update(frame_idx):
-    points = trajectory[frame_idx]
-    scatter.set_offsets(points)
-    t_remaining = T_NOISE_STEPS - frame_idx
-    title.set_text(f"Reverse Diffusion (t={t_remaining})")
-    return scatter, title
-
-anim = FuncAnimation(fig, update, frames=len(trajectory), interval=50, blit=False)
-anim.save("diffusion_swiss_roll.mp4", writer="ffmpeg", fps=20)
-
-plt.show()
+if __name__ == "__main__":
+    main()
