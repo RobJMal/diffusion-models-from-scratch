@@ -1,48 +1,26 @@
-import os
+import time
 
 import torch
 import torch.nn as nn
 
 from diffusion.config import Config
 from diffusion.diffusion_process import GaussianDiffusion
+from diffusion.metrics import count_parameters, estimate_forward_flops
 from diffusion.models import MLPDenoiser
 
 
-def _model_config(config: Config) -> dict:
-    """The subset of Config that determines MLPDenoiser's parameter shapes.
-    Saved alongside checkpoints so a stale checkpoint is detected instead of
-    crashing load_state_dict with a shape-mismatch error."""
-    return {
-        "time_dim": config.time_dim,
-        "coordinate_dim": config.coordinate_dim,
-        "inner_layer_dim": config.inner_layer_dim,
-    }
+def train(
+    model: MLPDenoiser, diffusion: GaussianDiffusion, x_data: torch.Tensor, config: Config
+) -> tuple[list[float], dict]:
+    n_params = count_parameters(model)
+    flops = estimate_forward_flops(model, batch_size=config.batch_size)
+    print(f"Model: {n_params:,} trainable params, ~{flops / 1e6:.2f} MFLOPs/forward pass (batch={config.batch_size})")
 
-
-def get_model(config: Config, diffusion: GaussianDiffusion, x_data: torch.Tensor) -> MLPDenoiser:
-    """Load a cached, architecture-matching checkpoint if one exists; otherwise train fresh."""
-    model = MLPDenoiser(
-        time_dim=config.time_dim,
-        coordinate_dim=config.coordinate_dim,
-        inner_layer_dim=config.inner_layer_dim,
-    )
-
-    if os.path.exists(config.checkpoint_path):
-        checkpoint = torch.load(config.checkpoint_path)
-        if checkpoint.get("model_config") == _model_config(config):
-            model.load_state_dict(checkpoint["model_state_dict"])
-            print(f"Loaded cached model weights from {config.checkpoint_path}")
-            return model
-        print(f"Checkpoint at {config.checkpoint_path} doesn't match current model config, retraining...")
-
-    train(model, diffusion, x_data, config)
-    return model
-
-
-def train(model: MLPDenoiser, diffusion: GaussianDiffusion, x_data: torch.Tensor, config: Config) -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     n_samples = x_data.shape[0]
+    loss_history: list[float] = []
 
+    start_time = time.perf_counter()
     for epoch in range(config.epochs):
         # Sample random mini-batch from the dataset
         idx = torch.randint(0, n_samples, (config.batch_size,))
@@ -64,12 +42,22 @@ def train(model: MLPDenoiser, diffusion: GaussianDiffusion, x_data: torch.Tensor
         loss.backward()
         optimizer.step()
 
+        loss_history.append(loss.item())
+
         if (epoch + 1) % 500 == 0:
             print(f"Epoch {epoch+1}/{config.epochs} | Loss: {loss.item():.5f}")
+    elapsed = time.perf_counter() - start_time
 
-    os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
-    torch.save(
-        {"model_state_dict": model.state_dict(), "model_config": _model_config(config)},
-        config.checkpoint_path,
-    )
-    print(f"Saved model weights to {config.checkpoint_path}")
+    epochs_per_sec = config.epochs / elapsed
+    samples_per_sec = (config.epochs * config.batch_size) / elapsed
+    print(f"Training took {elapsed:.1f}s ({epochs_per_sec:.1f} epochs/s, {samples_per_sec:,.0f} samples/s)")
+
+    metrics = {
+        "trainable_params": n_params,
+        "flops_per_forward_pass": flops,
+        "training_time_sec": elapsed,
+        "epochs_per_sec": epochs_per_sec,
+        "samples_per_sec": samples_per_sec,
+        "final_loss": loss_history[-1],
+    }
+    return loss_history, metrics

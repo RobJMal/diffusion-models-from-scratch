@@ -1,3 +1,5 @@
+import dataclasses
+import json
 from dataclasses import dataclass
 
 
@@ -26,7 +28,11 @@ class Config:
     # Sampling
     num_generate_samples: int = 1000
 
-    # Output paths
-    checkpoint_path: str = "outputs/diffusion_model.pt"
-    png_path: str = "outputs/diffusion_final_result.png"
-    mp4_path: str = "outputs/diffusion_swiss_roll.mp4"
+    @classmethod
+    def load(cls, path: str) -> "Config":
+        with open(path) as f:
+            return cls(**json.load(f))
+
+    def save(self, path: str) -> None:
+        with open(path, "w") as f:
+            json.dump(dataclasses.asdict(self), f, indent=2)

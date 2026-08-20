@@ -5,6 +5,17 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 
+def save_loss_curve(losses: list[float], path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    plt.figure()
+    plt.plot(losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.yscale("log")
+    plt.title("Training Loss")
+    plt.savefig(path)
+
+
 def save_final_png(generated_points: np.ndarray, path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     plt.figure()
