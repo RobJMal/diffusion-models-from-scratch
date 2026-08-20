@@ -132,7 +132,7 @@ def generate_samples(num_samples=1000):
 
         if t_idx > 0:
             # Add small noise z back for stochasticity
-            z = torch.rand_like(x_t)
+            z = torch.randn_like(x_t)
             sigma_t = torch.sqrt(beta_t)
             x_t = mean + sigma_t * z
         else:
